@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>PaperPal</title>
+  <style>
+    :root { --bg:#0b0f17; --panel:#121a2a; --muted:#8aa0c8; --text:#eaf0ff; --accent:#4f8cff; --user:#2b6cff; --bot:#1f2a44; --border:#21304d; }
+    * { box-sizing:border-box; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial; }
+    body { margin:0; background:var(--bg); color:var(--text); }
+    .wrap { max-width: 980px; margin: 0 auto; padding: 20px; }
+    .top { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:14px; }
+    .brand { display:flex; flex-direction:column; }
+    .brand h1 { margin:0; font-size:18px; letter-spacing:.4px; }
+    .brand p { margin:4px 0 0; color:var(--muted); font-size:13px; }
+    .card { background:var(--panel); border:1px solid var(--border); border-radius:14px; overflow:hidden; }
+    .bar { display:flex; gap:10px; padding:12px; border-bottom:1px solid var(--border); align-items:center; flex-wrap:wrap; }
+    .bar input[type="file"]{ color:var(--muted); }
+    .btn { background:transparent; border:1px solid var(--border); color:var(--text); padding:10px 12px; border-radius:12px; cursor:pointer; }
+    .btn.primary { background: var(--accent); border-color: transparent; color:#041022; font-weight:600; }
+    .btn:disabled { opacity:.55; cursor:not-allowed; }
+    .meta { color:var(--muted); font-size:12px; margin-left:auto; }
+    .chat { height: 560px; overflow:auto; padding:14px; display:flex; flex-direction:column; gap:10px; }
+    .msg { max-width: 78%; padding:12px 12px; border-radius:14px; border:1px solid var(--border); white-space:pre-wrap; line-height:1.35; }
+    .msg.user { align-self:flex-end; background: rgba(43,108,255,.18); border-color: rgba(79,140,255,.35); }
+    .msg.bot { align-self:flex-start; background: rgba(31,42,68,.55); }
+    .input { display:flex; gap:10px; padding:12px; border-top:1px solid var(--border); }
+    textarea { flex:1; resize:none; height:46px; padding:10px 12px; border-radius:12px; border:1px solid var(--border); background:#0e1626; color:var(--text); }
+    .hint { color:var(--muted); font-size:12px; margin-top:10px; }
+    code { background:#0e1626; padding:2px 6px; border-radius:8px; border:1px solid var(--border); }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="top">
+      <div class="brand">
+        <h1>PaperPal</h1>
+        <p>Upload a PDF → get a structured summary → ask follow-up questions grounded in the paper.</p>
+      </div>
+      <div class="meta" id="status">No document uploaded.</div>
+    </div>
+
+    <div class="card">
+      <div class="bar">
+        <input id="pdf" type="file" accept="application/pdf" />
+        <button class="btn primary" id="uploadBtn">Upload</button>
+        <button class="btn" id="summBtn" disabled>Summarize</button>
+        <div class="meta" id="docMeta"></div>
+      </div>
+
+      <div class="chat" id="chat"></div>
+
+      <div class="input">
+        <textarea id="msg" placeholder="Ask a question about the uploaded paper…"></textarea>
+        <button class="btn primary" id="sendBtn" disabled>Send</button>
+      </div>
+    </div>
+
+<script>
+  const chatEl = document.getElementById("chat");
+  const statusEl = document.getElementById("status");
+  const docMetaEl = document.getElementById("docMeta");
+  const pdfEl = document.getElementById("pdf");
+  const uploadBtn = document.getElementById("uploadBtn");
+  const summBtn = document.getElementById("summBtn");
+  const sendBtn = document.getElementById("sendBtn");
+  const msgEl = document.getElementById("msg");
+
+  let docId = null;
+  let history = [];
+
+  function addMsg(role, text) {
+    const div = document.createElement("div");
+    div.className = "msg " + (role === "user" ? "user" : "bot");
+    div.textContent = text;
+    chatEl.appendChild(div);
+    chatEl.scrollTop = chatEl.scrollHeight;
+  }
+
+  function setReady(ready) {
+    summBtn.disabled = !ready;
+    sendBtn.disabled = !ready;
+    statusEl.textContent = ready ? "Document ready." : "No document uploaded.";
+  }
+
+  async function uploadPdf() {
+    const file = pdfEl.files[0];
+    if (!file) { alert("Choose a PDF first."); return; }
+
+    uploadBtn.disabled = true;
+    uploadBtn.textContent = "Uploading…";
+
+    try {
+      const fd = new FormData();
+      fd.append("pdf", file);
+
+      const res = await fetch("/api/upload", { method: "POST", body: fd });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || "Upload failed");
+
+      docId = data.doc_id;
+      history = [];
+      chatEl.innerHTML = "";
+      addMsg("bot", `Uploaded: ${data.filename}\nPages processed: ${data.pages_processed}\nText length: ${data.chars} chars`);
+      docMetaEl.textContent = `doc_id: ${docId.slice(0,8)}…`;
+      setReady(true);
+    } catch (e) {
+      alert(e.message);
+      setReady(false);
+    } finally {
+      uploadBtn.disabled = false;
+      uploadBtn.textContent = "Upload";
+    }
+  }
+
+  async function summarize() {
+    if (!docId) return;
+    summBtn.disabled = true;
+    summBtn.textContent = "Summarizing…";
+
+    try {
+      const res = await fetch("/api/summarize", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ doc_id: docId })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || "Summarize failed");
+      addMsg("bot", data.summary);
+    } catch (e) {
+      addMsg("bot", "Error: " + e.message);
+    } finally {
+      summBtn.disabled = false;
+      summBtn.textContent = "Summarize";
+    }
+  }
+
+  async function send() {
+    const text = msgEl.value.trim();
+    if (!text || !docId) return;
+    msgEl.value = "";
+
+    addMsg("user", text);
+    sendBtn.disabled = true;
+
+    try {
+      const res = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ doc_id: docId, message: text, history })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || "Chat failed");
+      addMsg("bot", data.answer);
+
+      history.push({ role: "user", content: text });
+      history.push({ role: "assistant", content: data.answer });
+      history = history.slice(-16);
+    } catch (e) {
+      addMsg("bot", "Error: " + e.message);
+    } finally {
+      sendBtn.disabled = false;
+    }
+  }
+
+  uploadBtn.addEventListener("click", uploadPdf);
+  summBtn.addEventListener("click", summarize);
+  sendBtn.addEventListener("click", send);
+  msgEl.addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter" && !ev.shiftKey) {
+      ev.preventDefault();
+      send();
+    }
+  });
+
+  setReady(false);
+</script>
+</body>
+</html>
